@@ -1,0 +1,10 @@
+[project]
+name = "sec-geo-fence"
+version = "0.1.0"
+description = "GSB security exercise: geographic fence and impossible-travel checks"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
