@@ -21,7 +21,18 @@ def haversine(a: tuple[float, float], b: tuple[float, float]) -> float:
     with an absolute tolerance of 1e-9 km; a planar approximation or a
     missing degree-to-radian conversion must fail those tests.
     """
-    raise NotImplementedError("haversine is a stub")
+    earth_radius_km = 6371.0088
+    lat1 = math.radians(a[0])
+    lon1 = math.radians(a[1])
+    lat2 = math.radians(b[0])
+    lon2 = math.radians(b[1])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    arc = (
+        math.sin(dlat / 2.0) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2.0) ** 2
+    )
+    return 2.0 * earth_radius_km * math.asin(math.sqrt(arc))
 
 
 def travel_speed(
@@ -41,7 +52,15 @@ def travel_speed(
     Negative distance raises ValueError. Finite results are compared with
     an absolute tolerance of 1e-9 km/h.
     """
-    raise NotImplementedError("travel_speed is a stub")
+    if km < 0:
+        raise ValueError("distance must be non-negative")
+    if hours is None:
+        if prev is None or cur is None:
+            return math.inf
+        hours = (cur - prev).total_seconds() / 3600.0
+    if hours <= 0:
+        return 0.0 if km == 0 else math.inf
+    return km / hours
 
 
 def impossible_travel(prev: dict, cur: dict, policy: dict) -> bool:
@@ -54,7 +73,12 @@ def impossible_travel(prev: dict, cur: dict, policy: dict) -> bool:
     policy max_speed_kmh is allowed, with an absolute tolerance of
     1e-9 km/h.
     """
-    raise NotImplementedError("impossible_travel is a stub")
+    km = haversine(
+        (prev["lat"], prev["lon"]),
+        (cur["lat"], cur["lon"]),
+    )
+    speed = travel_speed(prev.get("ts"), cur.get("ts"), km, None)
+    return speed > policy["max_speed_kmh"] + 1e-9
 
 
 def trusted_region(ip: str, regions: list[str]) -> bool:
@@ -66,7 +90,21 @@ def trusted_region(ip: str, regions: list[str]) -> bool:
     the network level rather than a string-prefix comparison. Malformed
     addresses or networks, and an empty region list, return False.
     """
-    raise NotImplementedError("trusted_region is a stub")
+    if not regions:
+        return False
+    client = ip.split(",", 1)[0].strip()
+    try:
+        address = ipaddress.ip_address(client)
+    except ValueError:
+        return False
+    for region in regions:
+        try:
+            network = ipaddress.ip_network(region, strict=False)
+        except ValueError:
+            continue
+        if address in network:
+            return True
+    return False
 
 
 def timezone_shift(prev_tz: str, cur_tz: str) -> int:
@@ -77,7 +115,15 @@ def timezone_shift(prev_tz: str, cur_tz: str) -> int:
     previous offset and may be negative, zero, or larger than 12 when the
     date line is crossed. Negative values must not be clamped to zero.
     """
-    raise NotImplementedError("timezone_shift is a stub")
+
+    def _offset_hours(value: str) -> int:
+        if value == "Z":
+            return 0
+        sign = 1 if value[3] == "+" else -1
+        hours = int(value[4:6])
+        return sign * hours
+
+    return _offset_hours(cur_tz) - _offset_hours(prev_tz)
 
 
 def require_step_up(event: dict, policy: dict) -> bool:
@@ -90,7 +136,23 @@ def require_step_up(event: dict, policy: dict) -> bool:
     threshold. Missing or unusable step-up configuration fails closed and
     returns True.
     """
-    raise NotImplementedError("require_step_up is a stub")
+    weights = policy.get("risk_weights")
+    threshold = policy.get("step_up_threshold")
+    if not isinstance(weights, dict) or not weights:
+        return True
+    if not isinstance(threshold, (int, float)) or isinstance(
+        threshold, bool
+    ) or threshold <= 0:
+        return True
+    total = sum(
+        weight
+        for tag, weight in weights.items()
+        if tag in event.get("risks", ())
+        and isinstance(weight, (int, float))
+        and not isinstance(weight, bool)
+        and weight >= 0
+    )
+    return total >= threshold
 
 
 def validate_policy(policy: dict) -> list[str]:
@@ -102,7 +164,37 @@ def validate_policy(policy: dict) -> list[str]:
     exact messages 速度阈值过高, 缺少地区白名单 and 缺少二次验证 for the
     corresponding problems, or an empty list for a valid policy.
     """
-    raise NotImplementedError("validate_policy is a stub")
+    problems: list[str] = []
+    max_speed = policy.get("max_speed_kmh")
+    speed_ok = (
+        isinstance(max_speed, (int, float))
+        and not isinstance(max_speed, bool)
+        and 0 < max_speed <= 1000
+    )
+    if not speed_ok:
+        problems.append("速度阈值过高")
+    if not policy.get("regions"):
+        problems.append("缺少地区白名单")
+    weights = policy.get("risk_weights")
+    threshold = policy.get("step_up_threshold")
+    weights_ok = (
+        isinstance(weights, dict)
+        and len(weights) > 0
+        and all(
+            isinstance(weight, (int, float))
+            and not isinstance(weight, bool)
+            and weight > 0
+            for weight in weights.values()
+        )
+    )
+    threshold_ok = (
+        isinstance(threshold, (int, float))
+        and not isinstance(threshold, bool)
+        and threshold > 0
+    )
+    if not weights_ok or not threshold_ok:
+        problems.append("缺少二次验证")
+    return problems
 
 
 def fence_batch(events: list[dict], policy: dict) -> dict:
@@ -115,4 +207,9 @@ def fence_batch(events: list[dict], policy: dict) -> dict:
     be reused across positions or calls. An empty batch returns an empty
     list. Missing timestamps count as impossible travel.
     """
-    raise NotImplementedError("fence_batch is a stub")
+    flags = [False] * len(events)
+    for index in range(1, len(events)):
+        flags[index] = impossible_travel(
+            events[index - 1], events[index], policy
+        )
+    return {"impossible": flags}
